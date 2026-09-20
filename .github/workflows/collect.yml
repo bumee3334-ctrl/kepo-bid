@@ -1,13 +1,17 @@
 name: 공고 수집
 
+# 자동 실행 없이, 직접 눌렀을 때만 실행됩니다. (Actions 탭 → 공고 수집 → Run workflow)
 on:
-  schedule:
-    # 시간은 UTC 기준입니다. 한국 시간(KST)으로는 각각 08:30, 12:30, 17:30 입니다.
-    # (GitHub 사정으로 몇 분~수십 분 늦게 실행될 수 있어요)
-    - cron: '30 23 * * *'
-    - cron: '30 3 * * *'
-    - cron: '30 8 * * *'
-  workflow_dispatch:   # 수동 실행 버튼
+  workflow_dispatch:
+    inputs:
+      begin:
+        description: '시작일 (공고일 기준, 예: 2021-09-21). 비워두면 오늘부터 5년 전'
+        required: false
+        default: ''
+      end:
+        description: '종료일 (공고일 기준, 예: 2026-09-21). 비워두면 오늘부터 29일 뒤'
+        required: false
+        default: ''
 
 permissions:
   contents: write
@@ -19,6 +23,7 @@ concurrency:
 jobs:
   collect:
     runs-on: ubuntu-latest
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
 
@@ -31,17 +36,20 @@ jobs:
         continue-on-error: true
         env:
           KEPCO_API_KEY: ${{ secrets.KEPCO_API_KEY }}
+          BEGIN_DATE: ${{ inputs.begin }}
+          END_DATE: ${{ inputs.end }}
         run: node scripts/collect.mjs
 
       - name: 변경된 데이터 저장
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data/bids.json
+          git add data
           if git diff --cached --quiet; then
             echo "변경 없음"
           else
             git commit -m "공고 데이터 갱신"
+            git pull --rebase
             git push
           fi
 
