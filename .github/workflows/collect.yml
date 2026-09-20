@@ -12,6 +12,10 @@ on:
         description: '종료일 (공고일 기준, 예: 2026-09-21). 비워두면 오늘부터 29일 뒤'
         required: false
         default: ''
+      keyword:
+        description: '검색어 (입찰건명에 들어갈 단어, 예: 일산). 비워두면 전체 공고'
+        required: false
+        default: ''
 
 permissions:
   contents: write
@@ -38,6 +42,7 @@ jobs:
           KEPCO_API_KEY: ${{ secrets.KEPCO_API_KEY }}
           BEGIN_DATE: ${{ inputs.begin }}
           END_DATE: ${{ inputs.end }}
+          KEYWORD: ${{ inputs.keyword }}
         run: node scripts/collect.mjs
 
       - name: 변경된 데이터 저장
