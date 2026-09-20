@@ -3,12 +3,13 @@
 // - 시작일~종료일(공고일 기준)을 90일 단위 구간으로 나눠서, 오래된 구간부터 순서대로 요청합니다.
 // - 인증키는 환경변수 KEPCO_API_KEY 로만 받습니다. (코드나 파일에 적지 마세요)
 // - 기간은 환경변수 BEGIN_DATE / END_DATE 로 받습니다. (예: 2021-09-21) 비우면 기본값을 씁니다.
+// - 환경변수 RESET_DATA=true 이면 기존에 저장된 공고를 모두 지우고, 이번에 받은 공고만 남깁니다.
 // - 검색어는 환경변수 KEYWORD 로 받습니다. 넣으면 API의 입찰건명(name) 조건으로 함께 요청합니다. 비우면 전체를 받습니다.
 // - 저장 위치
 //     data/bids.json            목록용 (가벼운 정보만)
 //     data/detail/YYYY-MM.json  상세용 (참가자격·첨부파일). 공고월별로 나뉘어 있고 공고를 눌렀을 때만 불러옵니다.
 
-import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, rm } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -201,6 +202,12 @@ async function requestOnce({ apiKey, companyId, begin, end, keyword, fetchImpl }
   const rows = Array.isArray(json) ? json : json && json.data;
   if (!Array.isArray(rows)) {
     if (json && json.errCd !== undefined) {
+      // 조건에 맞는 공고가 없으면 API가 오류 404 (NotFound) 로 응답합니다. 실패가 아니라 "결과 없음"으로 처리합니다.
+      if (String(json.errCd).trim() === '404') {
+        const none = [];
+        none.notFound = true;
+        return none;
+      }
       throw new Error(`${name}: API 오류 ${json.errCd} - ${mask(json.errMsg || '')}`);
     }
     throw new Error(`${name}: 예상과 다른 응답 형식 (항목: ${Object.keys(json || {}).join(', ')})`);
@@ -231,7 +238,7 @@ async function readJson(path) {
 }
 
 export async function run({
-  apiKey, dataPath, beginInput, endInput, keyword = '',
+  apiKey, dataPath, beginInput, endInput, keyword = '', reset = false,
   fetchImpl = fetch, nowMs = Date.now(), log = console.log,
   pauseMs = PAUSE_MS, sleepImpl = sleep,
 }) {
@@ -254,16 +261,22 @@ export async function run({
     newDetails.get(k)[it.id] = detail;
   };
   const prev = await readJson(dataPath);
-  for (const it of prev && Array.isArray(prev.items) ? prev.items : []) {
-    if (!it || !it.id) continue;
-    const { light, detail } = splitItem(it);
-    list.set(light.id, light);
-    if (it.qualification !== undefined || it.files !== undefined) putDetail(light, detail);
+  const prevItems = prev && Array.isArray(prev.items) ? prev.items : [];
+  if (reset) {
+    log(`※ 기존에 저장된 공고 ${prevItems.length}건과 상세 파일을 지우고, 이번에 받은 공고만 남깁니다. (수집이 끝까지 진행된 뒤에 지웁니다)`);
+  } else {
+    for (const it of prevItems) {
+      if (!it || !it.id) continue;
+      const { light, detail } = splitItem(it);
+      list.set(light.id, light);
+      if (it.qualification !== undefined || it.files !== undefined) putDetail(light, detail);
+    }
   }
 
   const counts = {};
   const failed = [];
   let okRequests = 0;
+  let notFoundCount = 0;              // API가 "결과 없음(404)"으로 응답한 횟수
   let n = 0;
   let noMatch = 0, received = 0;      // 검색어가 공고명에 없는 건수 (검색어를 썼을 때만 셈)
   const samples = [];                  // 받은 공고명 예시
@@ -291,7 +304,12 @@ export async function run({
         }
         counts[name] = (counts[name] || 0) + rows.length;
         okRequests++;
-        log(`${tag}: ${rows.length}건 (저장 ${kept}, 건너뜀 ${skipped})`);
+        if (rows.notFound) {
+          notFoundCount++;
+          log(`${tag}: 결과 없음`);
+        } else {
+          log(`${tag}: ${rows.length}건 (저장 ${kept}, 건너뜀 ${skipped})`);
+        }
         if ([100, 500, 1000, 5000, 10000].includes(rows.length)) {
           log(`  ※ 건수가 딱 떨어져요. 한 번에 받을 수 있는 개수에 제한이 있는지 확인이 필요합니다. (이 구간을 더 짧게 나눠 다시 받아보세요)`);
         }
@@ -308,6 +326,7 @@ export async function run({
   }
 
   // 상세 파일(공고월별)에 합쳐서 저장
+  if (reset) await rm(detailDir, { recursive: true, force: true });
   await mkdir(detailDir, { recursive: true });
   for (const [key, add] of newDetails) {
     const file = join(detailDir, `${key}.json`);
@@ -328,8 +347,11 @@ export async function run({
   };
   await mkdir(dirname(dataPath), { recursive: true });
   await writeFile(dataPath, JSON.stringify(out) + '\n', 'utf-8');
+  if (!kw && notFoundCount > 0) {
+    log(`※ 검색어 없이 조회했는데 "결과 없음"이 ${notFoundCount}번 나왔어요. 그 기간·발전사에 공고가 실제로 없는지 확인해 보세요.`);
+  }
   if (kw) {
-    log(`검색어 확인: 받은 ${received}건 중 공고명에 "${kw}"가 들어 있지 않은 건 ${noMatch}건`);
+    log(`검색어 확인: 받은 ${received}건 중 공고명에 검색어("${kw}")가 없는 건 ${noMatch}건`);
     if (received > 0 && noMatch > 0) log('  ※ 검색어가 공고명에 없는 공고가 섞여 있어요. API가 검색어를 부분 일치가 아닌 다른 방식으로 보거나, 조건을 무시했을 수 있습니다.');
     if (received === 0) log('  ※ 받은 공고가 없어요. 검색어가 공고명에 실제로 들어가는 단어인지, API가 부분 일치를 지원하는지 확인이 필요합니다.');
     if (samples.length) log(`  받은 공고명 예시: ${samples.join(' | ')}`);
@@ -355,6 +377,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   run({
     apiKey, dataPath,
     beginInput: process.env.BEGIN_DATE, endInput: process.env.END_DATE, keyword: process.env.KEYWORD,
+    reset: String(process.env.RESET_DATA || '').trim().toLowerCase() === 'true',
   }).catch((e) => {
     console.error(e.message);
     process.exit(1);
