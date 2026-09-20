@@ -16,6 +16,11 @@ on:
         description: '검색어 (입찰건명에 들어갈 단어, 예: 일산). 비워두면 전체 공고'
         required: false
         default: ''
+      reset:
+        description: '체크하면 기존에 저장된 공고를 모두 지우고 이번에 받은 공고만 남깁니다 (처음 한 번만 체크)'
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: write
@@ -43,6 +48,7 @@ jobs:
           BEGIN_DATE: ${{ inputs.begin }}
           END_DATE: ${{ inputs.end }}
           KEYWORD: ${{ inputs.keyword }}
+          RESET_DATA: ${{ inputs.reset }}
         run: node scripts/collect.mjs
 
       - name: 변경된 데이터 저장
