@@ -85,7 +85,7 @@ a.go-btn{display:inline-flex;align-items:center;text-decoration:none}
 .pill-btn{height:32px;padding:0 12px;border-radius:8px;border:1px solid var(--line);background:var(--surface);font-size:13px}
 .pill-btn:hover{border-color:var(--accent)}
 
-.table{--cols:108px minmax(0,1fr) 44px 92px 34px;background:var(--surface);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow);overflow:hidden}
+.table{--cols:108px 112px minmax(0,1fr) 44px 92px 34px;background:var(--surface);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow);overflow:hidden}
 .thead,.row{display:grid;grid-template-columns:var(--cols);align-items:center;column-gap:10px}
 .thead{padding:8px 12px 8px 16px;font-size:12.5px;color:var(--muted);border-bottom:1px solid var(--line);background:var(--bg)}
 ul.rows{list-style:none;margin:0;padding:0}
@@ -102,6 +102,9 @@ button.ttl:focus-visible{outline:none}
 button.ttl:focus-visible::after{outline:2px solid var(--accent);outline-offset:-2px}
 .org-in{display:none;color:var(--muted);margin-right:6px}
 .cat{font-size:12px;color:var(--muted)}
+.no{font-variant-numeric:tabular-nums;font-size:12.5px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.no-in{display:none}
+.more{display:flex;justify-content:center;padding:14px 0 0}
 .due{font-variant-numeric:tabular-nums;font-size:13.5px;white-space:nowrap}
 .x,.restore{position:relative;z-index:1;border:1px solid var(--line);background:var(--surface);border-radius:8px}
 .x{width:30px;height:30px;color:var(--muted);font-size:12px}
@@ -113,11 +116,12 @@ button.ttl:focus-visible::after{outline:2px solid var(--accent);outline-offset:-
 
 @media (max-width:720px){
   .wrap{padding:16px 12px 60px}
-  .table{--cols:minmax(0,1fr) 70px 34px}
+  .table{--cols:minmax(0,1fr) 84px 34px}
   .thead{display:none}
   .row{column-gap:8px}
-  .org,.cat{display:none}
+  .org,.no,.cat{display:none}
   .org-in{display:inline}
+  .no-in{display:block;color:var(--muted);font-size:12px}
 }
 
 /* detail drawer */
@@ -168,7 +172,7 @@ ul.files .off{color:var(--muted)}
   <header class="top">
     <div>
       <h1>입찰 공고 목록</h1>
-      <p>한전 SRM에 올라온 발전사 입찰공고를 마감일 순으로 모아봅니다</p>
+      <p>한전 SRM에 올라온 발전사 입찰공고를 공고일 순(최근 공고가 위)으로 모아봅니다</p>
     </div>
     <div class="status" id="status" aria-live="polite"></div>
   </header>
@@ -182,13 +186,13 @@ ul.files .off{color:var(--muted)}
     <div class="f-row">
       <span class="f-label">기간</span>
       <div class="dates">
-        <input id="from" type="date" aria-label="마감일 시작">
+        <input id="from" type="date" aria-label="공고일 시작">
         <span class="sep">~</span>
-        <input id="to" type="date" aria-label="마감일 끝">
-        <button class="preset" data-preset="today">오늘부터</button>
-        <button class="preset" data-preset="week">이번 주</button>
-        <button class="preset" data-preset="month">이번 달</button>
-        <button class="preset" data-preset="d30">30일</button>
+        <input id="to" type="date" aria-label="공고일 끝">
+        <button class="preset" data-preset="today">오늘</button>
+        <button class="preset" data-preset="d7">최근 7일</button>
+        <button class="preset" data-preset="d30">최근 30일</button>
+        <button class="preset" data-preset="y1">최근 1년</button>
         <button class="preset" data-preset="all">전체</button>
       </div>
     </div>
@@ -196,7 +200,7 @@ ul.files .off{color:var(--muted)}
       <span class="f-label">발전사</span>
       <div class="chips" id="orgs"></div>
     </div>
-    <p class="hint">기간은 마감일(개찰 전 최종 마감) 기준입니다. 공고를 누르면 상세 내용이 열리고, 필요 없는 공고는 ✕로 제외하면 다음에도 다시 나오지 않습니다(이 브라우저에 저장).</p>
+    <p class="hint">기간은 공고일 기준입니다(마감이 지난 공고는 흐리게 표시). 공고를 누르면 마감일 등 상세 내용이 열리고, 필요 없는 공고는 ✕로 제외하면 다음에도 다시 나오지 않습니다(이 브라우저에 저장).</p>
   </section>
 
   <main id="listPane" aria-live="polite"></main>
@@ -220,6 +224,7 @@ ul.files .off{color:var(--muted)}
   function esc(s){ return String(s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];}); }
   function safeUrl(u){ return /^https?:\/\//i.test(u||'') ? u : ''; }
   function won(n){ return (n===null||n===undefined||n==='') ? '-' : Number(n).toLocaleString('ko-KR')+'원'; }
+  var PAGE = 200;   // 한 번에 보여줄 공고 수 ("더 보기"로 늘어남)
   var today = new Date(); today.setHours(0,0,0,0);
 
   var ORG_NAMES = ['한국남동발전','한국중부발전','한국서부발전','한국남부발전','한국동서발전'];
@@ -232,12 +237,15 @@ ul.files .off{color:var(--muted)}
       .then(function(j){ items=Array.isArray(j.items)?j.items:[]; meta=j; loadState='ok'; loadFailed=false; })
       .catch(function(){ if(loadState==='ok'){ loadFailed=true; } else { loadState='error'; } });
   }
+  function dotted(s){ s=String(s); return /^\d{8}$/.test(s) ? s.slice(0,4)+'.'+s.slice(4,6)+'.'+s.slice(6,8) : s.replace(/-/g,'.'); }
   function renderStatus(){
     var el=document.getElementById('status'), h='';
     if(loadState==='ok' && meta && meta.updatedAt){
       var t=new Date(meta.updatedAt).toLocaleString('ko-KR',{timeZone:'Asia/Seoul',month:'numeric',day:'numeric',hour:'numeric',minute:'2-digit'});
       h='데이터 수집 '+esc(t);
-      if(meta.failed && meta.failed.length) h+='<br><span class="warn">수집 실패: '+meta.failed.map(esc).join(', ')+'</span>';
+      if(meta.range && meta.range.begin && meta.range.end) h+='<br>수집 범위(공고일) '+esc(dotted(meta.range.begin))+' ~ '+esc(dotted(meta.range.end));
+      var fl=meta.failed||[];
+      if(fl.length) h+='<br><span class="warn">수집 실패 '+fl.length+'건: '+fl.slice(0,3).map(esc).join(', ')+(fl.length>3?' 외 '+(fl.length-3)+'건':'')+'</span>';
     }
     if(loadFailed) h+='<br><span class="warn">최신 데이터를 불러오지 못해 이전 데이터를 보여줍니다</span>';
     el.innerHTML=h;
@@ -246,7 +254,7 @@ ul.files .off{color:var(--muted)}
   function loadEx(){ try{ var v=localStorage.getItem(KEY); return new Set(v?JSON.parse(v):[]); }catch(e){ return new Set(); } }
   function saveEx(){ try{ localStorage.setItem(KEY, JSON.stringify(Array.from(state.excluded))); }catch(e){} }
 
-  var state = { q:'', searchedAt:new Date(), from:fmt(today), to:'', orgs:new Set(), showExcluded:false, excluded:loadEx() };
+  var state = { q:'', searchedAt:new Date(), from:fmt(addDays(today,-30)), to:'', orgs:new Set(), showExcluded:false, excluded:loadEx(), limit:PAGE };
 
   function tokens(q){ return q.trim().toLowerCase().split(/[\s+]+/).filter(function(t){return t && t!=='-';}); }
   function allTokens(){ return tokens(state.q); }
@@ -261,23 +269,23 @@ ul.files .off{color:var(--muted)}
     return items.filter(function(it){
       if (state.excluded.has(it.id)!==excl) return false;
       if (state.orgs.size && !state.orgs.has(it.org)) return false;
-      if (state.from && it.deadline<state.from) return false;
-      if (state.to && it.deadline>state.to) return false;
+      if (state.from && (it.notice||'')<state.from) return false;
+      if (state.to && (it.notice||'')>state.to) return false;
       return matchQ(it,tk);
-    }).sort(function(a,b){ return a.deadline.localeCompare(b.deadline)||a.id.localeCompare(b.id); });
+    }).sort(function(a,b){ return (b.notice||'').localeCompare(a.notice||'')||b.id.localeCompare(a.id); });
   }
 
   var listEl=document.getElementById('listPane');
 
   function row(it,excl){
-    var d=parse(it.deadline);
     var past=it.deadline<fmt(today);
-    var label='<span class="org-in">'+esc(it.org.replace('한국',''))+'</span>'+esc(it.title);
+    var label='<span class="org-in">'+esc(it.org.replace('한국',''))+'</span>'+esc(it.title)+'<span class="no-in">'+esc(it.id)+'</span>';
     return '<li class="row'+(past?' past':'')+'" title="'+esc(it.org+' '+it.title)+'">'
       +'<span class="org">'+esc(it.org)+'</span>'
+      +'<span class="no" title="공고번호 '+esc(it.id)+'">'+esc(it.id)+'</span>'
       +'<button class="ttl" data-open="'+esc(it.id)+'" aria-haspopup="dialog">'+label+'</button>'
       +'<span class="cat">'+esc(it.category)+'</span>'
-      +'<span class="due">'+(d.getMonth()+1)+'/'+d.getDate()+' ('+WD[d.getDay()]+')</span>'
+      +'<span class="due" title="마감 '+esc(it.deadline)+'">'+(it.notice?esc(it.notice.replace(/-/g,'.')):'-')+'</span>'
       +(excl
         ? '<button class="restore" data-act="restore" data-id="'+esc(it.id)+'">복원</button>'
         : '<button class="x" data-act="exclude" data-id="'+esc(it.id)+'" aria-label="이 공고 제외">✕</button>')
@@ -307,12 +315,14 @@ ul.files .off{color:var(--muted)}
         ? '<div class="empty"><b>제외한 공고가 없어요</b>공고 오른쪽의 ✕를 누르면 여기로 모입니다.</div>'
         : '<div class="empty"><b>조건에 맞는 공고가 없어요</b>기간을 넓히거나 검색어·발전사 선택을 바꿔보세요.</div>';
     } else {
-      h+='<div class="table"><div class="thead"><span>발전사</span><span>공고명</span><span>구분</span><span>마감일</span><span></span></div>'
-        +'<ul class="rows">'+list.map(function(it){return row(it,excl);}).join('')+'</ul></div>';
+      var shown=list.slice(0,state.limit);
+      h+='<div class="table"><div class="thead"><span>발전사</span><span>공고번호</span><span>공고명</span><span>구분</span><span>공고일</span><span></span></div>'
+        +'<ul class="rows">'+shown.map(function(it){return row(it,excl);}).join('')+'</ul></div>';
+      if(list.length>shown.length) h+='<div class="more"><button class="pill-btn" data-act="more">더 보기 ('+(list.length-shown.length)+'건 남음)</button></div>';
     }
     listEl.innerHTML=h;
   }
-  function runSearch(){ state.searchedAt=new Date(); renderList(); }
+  function runSearch(){ state.searchedAt=new Date(); state.limit=PAGE; renderList(); }
 
   function renderOrgs(){
     var el=document.getElementById('orgs');
@@ -324,17 +334,45 @@ ul.files .off{color:var(--muted)}
   /* ---------- 상세 화면 ---------- */
   var overlay=document.getElementById('overlay'), drawer=document.getElementById('drawer');
   var openId=null, lastFocus=null;
-  function openDetail(id){
-    var it=items.filter(function(x){return x.id===id;})[0];
-    if(!it) return;
-    openId=id; lastFocus=document.activeElement;
-    var d=parse(it.deadline), excl=state.excluded.has(id);
-    var files=(it.files||[]).map(function(f){
+  var detailCache={};   /* 공고월 -> 그 달의 상세 묶음 (data/detail/YYYY-MM.json) */
+  function detailKey(it){ return it.notice && /^\d{4}-\d{2}/.test(it.notice) ? it.notice.slice(0,7) : 'unknown'; }
+  function loadDetail(it){
+    if(it.qualification!==undefined || it.files!==undefined){   /* 예전 형식: 목록에 같이 들어 있음 */
+      return Promise.resolve({qualification:it.qualification||'', files:it.files||[]});
+    }
+    var k=detailKey(it);
+    if(!detailCache[k]){
+      detailCache[k]=fetch('data/detail/'+k+'.json',{cache:'no-cache'})
+        .then(function(r){ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); })
+        .catch(function(e){ delete detailCache[k]; throw e; });
+    }
+    return detailCache[k].then(function(map){
+      var d=map && map[it.id];
+      return {qualification:(d&&d.qualification)||'', files:(d&&d.files)||[]};
+    });
+  }
+  function filesHtml(list){
+    var files=(list||[]).map(function(f){
       var u=safeUrl(f.url);
       return '<li>'+(u
         ? '<a href="'+esc(u)+'" target="_blank" rel="noopener noreferrer">'+esc(f.name)+'</a>'
         : '<span class="off" title="링크가 없어요">'+esc(f.name)+'</span>')+'</li>';
     }).join('');
+    return files?'<ul class="files">'+files+'</ul>':'<p class="dnote">첨부파일이 없어요.</p>';
+  }
+  function fillDetail(id,d,failed){
+    if(openId!==id) return;
+    var q=document.getElementById('dQual'), f=document.getElementById('dFiles');
+    if(!q||!f) return;
+    if(failed){ q.textContent='상세 내용을 불러오지 못했어요. 잠시 후 다시 열어보세요.'; f.innerHTML='<p class="dnote">불러오지 못했어요.</p>'; return; }
+    q.textContent=d.qualification||'(공고에 참가자격 내용이 없어요)';
+    f.innerHTML=filesHtml(d.files);
+  }
+  function openDetail(id){
+    var it=items.filter(function(x){return x.id===id;})[0];
+    if(!it) return;
+    openId=id; lastFocus=document.activeElement;
+    var d=parse(it.deadline), excl=state.excluded.has(id);
     drawer.innerHTML=
       '<div class="dh"><div><div class="dorg">'+esc(it.org)+(it.place?' · '+esc(it.place):'')+'</div>'
       +'<h2 id="dTitle">'+esc(it.title)+'</h2><div class="dno">공고번호 '+esc(it.id)+'</div></div>'
@@ -349,8 +387,8 @@ ul.files .off{color:var(--muted)}
         +'<dt>공고일</dt><dd>'+esc(it.notice||'-')+'</dd>'
         +'<dt>입찰신청 마감</dt><dd>'+esc(it.applyClose||'-')+'</dd>'
       +'</dl>'
-      +'<div class="sect"><h3>입찰 참가자격</h3><div class="qual">'+esc(it.qualification||'(공고에 참가자격 내용이 없어요)')+'</div></div>'
-      +'<div class="sect"><h3>첨부파일</h3>'+(files?'<ul class="files">'+files+'</ul>':'<p class="dnote">첨부파일이 없어요.</p>')+'</div>'
+      +'<div class="sect"><h3>입찰 참가자격</h3><div class="qual" id="dQual">불러오는 중…</div></div>'
+      +'<div class="sect"><h3>첨부파일</h3><div id="dFiles"><p class="dnote">불러오는 중…</p></div></div>'
       +'<div class="dfoot"><a class="go-btn" href="'+SRM_URL+'" target="_blank" rel="noopener noreferrer">SRM 바로가기</a>'
       +(excl
         ? '<button class="pill-btn" data-dact="restore">복원</button>'
@@ -360,6 +398,7 @@ ul.files .off{color:var(--muted)}
     document.body.style.overflow='hidden';
     drawer.scrollTop=0;
     document.getElementById('dClose').focus();
+    loadDetail(it).then(function(d){ fillDetail(id,d,false); }, function(){ fillDetail(id,null,true); });
   }
   function closeDetail(){
     if(!overlay.classList.contains('open')) return;
@@ -418,11 +457,11 @@ ul.files .off{color:var(--muted)}
 
   document.querySelectorAll('[data-preset]').forEach(function(btn){
     btn.addEventListener('click',function(){
-      var p=btn.getAttribute('data-preset'), f=fmt(today), t='';
-      if(p==='week') t=fmt(addDays(today,6-today.getDay()));
-      else if(p==='month') t=fmt(new Date(today.getFullYear(),today.getMonth()+1,0));
-      else if(p==='d30') t=fmt(addDays(today,30));
-      else if(p==='all'){ f=''; }
+      var p=btn.getAttribute('data-preset'), f='', t='';
+      if(p==='today') f=fmt(today);
+      else if(p==='d7') f=fmt(addDays(today,-7));
+      else if(p==='d30') f=fmt(addDays(today,-30));
+      else if(p==='y1') f=fmt(addDays(today,-365));
       state.from=f; state.to=t; fromEl.value=f; toEl.value=t;
       runSearch();
     });
@@ -450,6 +489,7 @@ ul.files .off{color:var(--muted)}
       state.excluded.clear(); saveEx(); state.showExcluded=false; renderList();
     } else if(act==='showEx'){ state.showExcluded=true; renderList(); }
     else if(act==='back'){ state.showExcluded=false; renderList(); }
+    else if(act==='more'){ state.limit+=PAGE; renderList(); }
   });
 
   renderOrgs(); renderList();
