@@ -3,6 +3,7 @@
 // - 시작일~종료일(공고일 기준)을 90일 단위 구간으로 나눠서, 오래된 구간부터 순서대로 요청합니다.
 // - 인증키는 환경변수 KEPCO_API_KEY 로만 받습니다. (코드나 파일에 적지 마세요)
 // - 기간은 환경변수 BEGIN_DATE / END_DATE 로 받습니다. (예: 2021-09-21) 비우면 기본값을 씁니다.
+// - 검색어는 환경변수 KEYWORD 로 받습니다. 넣으면 API의 입찰건명(name) 조건으로 함께 요청합니다. 비우면 전체를 받습니다.
 // - 저장 위치
 //     data/bids.json            목록용 (가벼운 정보만)
 //     data/detail/YYYY-MM.json  상세용 (참가자격·첨부파일). 공고월별로 나뉘어 있고 공고를 눌렀을 때만 불러옵니다.
@@ -172,12 +173,12 @@ export function detailKey(it) {
 
 class RetryableError extends Error {}
 
-async function requestOnce({ apiKey, companyId, begin, end, fetchImpl }) {
+async function requestOnce({ apiKey, companyId, begin, end, keyword, fetchImpl }) {
   const name = COMPANIES[companyId] || companyId;
   const url = new URL(API_URL);
-  url.search = new URLSearchParams({
-    apiKey, noticeBeginDate: begin, noticeEndDate: end, companyId, returnType: 'json',
-  }).toString();
+  const params = { apiKey, noticeBeginDate: begin, noticeEndDate: end, companyId, returnType: 'json' };
+  if (keyword) params.name = keyword;   // 입찰건명(선택). 어떤 방식으로 일치를 보는지는 매뉴얼에 없어서 실행 로그로 확인합니다
+  url.search = new URLSearchParams(params).toString();
   const mask = (s) => String(s).split(apiKey).join('***');
 
   let res, text;
@@ -230,16 +231,18 @@ async function readJson(path) {
 }
 
 export async function run({
-  apiKey, dataPath, beginInput, endInput,
+  apiKey, dataPath, beginInput, endInput, keyword = '',
   fetchImpl = fetch, nowMs = Date.now(), log = console.log,
   pauseMs = PAUSE_MS, sleepImpl = sleep,
 }) {
   const { begin, end } = resolveRange({ beginInput, endInput, nowMs });
+  const kw = String(keyword ?? '').trim();
   const chunks = makeChunks(begin, end);
   const detailDir = join(dirname(dataPath), 'detail');
   const companyIds = Object.keys(COMPANIES);
 
   log(`조회 기간(공고일 기준): ${dash(begin)} ~ ${dash(end)}`);
+  if (kw) log(`검색어(입찰건명): "${kw}"`);
   log(`${CHUNK_DAYS}일 단위 ${chunks.length}개 구간 × 발전사 ${companyIds.length}곳 = 요청 ${chunks.length * companyIds.length}번 (오래된 구간부터 순서대로)`);
 
   // 이미 저장된 목록을 불러옵니다. (예전 형식이라 상세 내용이 들어 있으면 상세 파일로 옮깁니다)
@@ -262,6 +265,8 @@ export async function run({
   const failed = [];
   let okRequests = 0;
   let n = 0;
+  let noMatch = 0, received = 0;      // 검색어가 공고명에 없는 건수 (검색어를 썼을 때만 셈)
+  const samples = [];                  // 받은 공고명 예시
 
   for (const ch of chunks) {
     for (const companyId of companyIds) {
@@ -269,10 +274,15 @@ export async function run({
       n++;
       const tag = `[${n}/${chunks.length * companyIds.length}] ${dash(ch.begin)}~${dash(ch.end)} ${name}`;
       try {
-        const rows = await fetchCompany({ apiKey, companyId, begin: ch.begin, end: ch.end, fetchImpl }, sleepImpl);
+        const rows = await fetchCompany({ apiKey, companyId, begin: ch.begin, end: ch.end, keyword: kw, fetchImpl }, sleepImpl);
         let kept = 0, skipped = 0;
         for (const raw of rows) {
           const it = normalize(raw);
+          if (kw && it) {
+            received++;
+            if (!it.title.toLowerCase().includes(kw.toLowerCase())) noMatch++;
+            if (samples.length < 5) samples.push(it.title);
+          }
           if (!it) { skipped++; continue; }
           const { light, detail } = splitItem(it);
           list.set(light.id, light);
@@ -318,6 +328,12 @@ export async function run({
   };
   await mkdir(dirname(dataPath), { recursive: true });
   await writeFile(dataPath, JSON.stringify(out) + '\n', 'utf-8');
+  if (kw) {
+    log(`검색어 확인: 받은 ${received}건 중 공고명에 "${kw}"가 들어 있지 않은 건 ${noMatch}건`);
+    if (received > 0 && noMatch > 0) log('  ※ 검색어가 공고명에 없는 공고가 섞여 있어요. API가 검색어를 부분 일치가 아닌 다른 방식으로 보거나, 조건을 무시했을 수 있습니다.');
+    if (received === 0) log('  ※ 받은 공고가 없어요. 검색어가 공고명에 실제로 들어가는 단어인지, API가 부분 일치를 지원하는지 확인이 필요합니다.');
+    if (samples.length) log(`  받은 공고명 예시: ${samples.join(' | ')}`);
+  }
   log(`저장 완료: 목록 총 ${items.length}건, 상세 파일 ${newDetails.size}개 갱신`);
 
   if (failed.length) {
@@ -338,7 +354,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const dataPath = fileURLToPath(new URL('../data/bids.json', import.meta.url));
   run({
     apiKey, dataPath,
-    beginInput: process.env.BEGIN_DATE, endInput: process.env.END_DATE,
+    beginInput: process.env.BEGIN_DATE, endInput: process.env.END_DATE, keyword: process.env.KEYWORD,
   }).catch((e) => {
     console.error(e.message);
     process.exit(1);
